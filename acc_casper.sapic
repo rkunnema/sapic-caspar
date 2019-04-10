@@ -1,0 +1,296 @@
+theory Casper
+begin 
+
+builtins: multiset
+
+functions:
+  cons/2,
+  nil/0
+
+
+
+let CheckpointTree =
+  in(root);
+  insert <'height', root>, '1';
+  insert <'ancestors', root>, nil();
+  !(in(<s, t>);
+    lookup <'height', s> as h in
+      insert <'height', t>, h+'1';
+      lookup <'ancestors', s> as sa in 
+        insert <'isinlist', s, cons(s, sa)>, '1';
+        insert <'parent', t>, s;
+        insert <'ancestors', t>, cons(s, sa))
+
+let HonestValidator =
+  let vk = 'HonestValidator' in
+    !(in(<s, t>);
+      event Honest(vk);
+      lookup <'height', s> as hs in
+        lookup <'height', t> as ht in
+          event LessThan(hs, ht);
+          event LessThan(hs, '1'+'1'+'1'+'1'+'1'+'1');
+          event LessThan(ht, '1'+'1'+'1'+'1'+'1'+'1');
+          event Target(ht);
+          event Range(hs, ht);
+          insert <'supermajority', s, t>, '1';
+          insert <'vote', vk, s, t, hs, ht>, '1') // don't save but just use signature?
+
+let DishonestValidator =
+  let vk = 'DishonestValidator' in
+    !(in(<s, t>);
+      event Corrupted(vk);
+      lookup <'height', s> as hs in
+        lookup <'height', t> as ht in
+          event LessThan(hs, ht);
+          event LessThan(hs, '1'+'1'+'1'+'1'+'1'+'1');
+          event LessThan(ht, '1'+'1'+'1'+'1'+'1'+'1');
+          insert <'vote', vk, s, t, hs, ht>, '1')
+
+
+
+  let VTest =
+ 	in(<s1,t1>);
+ 	in(<s2,t2>);
+ 	in(vk);
+ 	lookup <'vote',vk,s1,t1,hs1,ht1> as v1 in //the votes exist	  
+ 	lookup <'vote',vk,s2,t2,hs2,ht2> as v2 in
+	lookup <'height', t1> as ht1 in	 //get the heights of t1 and t2
+	lookup <'height', t2> as ht2 in
+	lookup <'height', s1> as hs1 in	 //get the heights of t1 and t2
+	lookup <'height', s2> as hs2 in
+	if ht1=ht2 then event Fail(s1,s2,t1,t2) // commandment 1 
+	else (event LessThan(hs1,hs2); event LessThan(hs2,ht2); event LessThan(ht2,ht1); event Fail(s1,s2,t1,t2) || //commandment 2
+	      event LessThan(hs2,hs1); event LessThan(hs1,ht1); event LessThan(ht1,ht2); event Fail(s1,s2,t1,t2) || //commandment 2
+	      event GreaterEqualThan(hs1,hs2); event LessThan(hs2,ht2); event Ok(s1,s2,t1,t2) ||
+	      event LessThan(hs1,hs2);	       event GreaterEqualThan(hs2,ht2);  event Ok(s1,s2,t1,t2) ||
+	      event GreaterEqualThan(hs1,hs2); event LessThan(ht2,ht1); event Ok(s1,s2,t1,t2) ||
+	      event LessThan(hs1,hs2); 	       event GreaterThan(ht2,ht1); event Ok(s1,s2,t1,t2))
+	      
+
+let VConflict =
+  !(in(<s, t>);
+    in(vk);
+    lookup <'vote',vk,s,t,hs,ht> as v in //the votes exist	 
+    if s = t then 0 else
+      lookup <'ancestors', s> as sa in
+        lookup <'isinlist', t, sa> as x in
+          0 // t is an ancestor of s
+        else
+          lookup <'ancestors', t> as ta in
+            lookup <'isinlist', s, ta> as x in
+              0 // s is an ancestor of t
+            else
+              insert <'conflict', s, t>, '1';
+              insert <'conflict', t, s>, '1')
+
+
+/*
+ * In the following, we model propositional sentences as processes.
+ */
+
+// restriction Conflict:
+//   "All s t. not(s = ancestor(t)) | not(s = descendant(t))"
+let Conflict =
+  !(in(<s, t>);
+    if s = t then 0 else
+      lookup <'ancestors', s> as sa in
+        lookup <'isinlist', t, sa> as x in
+          0 // t is an ancestor of s
+        else
+          lookup <'ancestors', t> as ta in
+            lookup <'isinlist', s, ta> as x in
+              0 // s is an ancestor of t
+            else
+              insert <'vconflict', s, t>, '1';
+              insert <'vconflict', t, s>, '1')
+                
+// restriction Justified:
+//  "All c. c = root(c) | (Ex cp. Supermajority(cp, c) & Justified(cp))"
+let Justified =
+  !(in(c);
+    lookup <'height', c> as hc in
+      if hc = '1' then
+        insert <'justified', c>, '1'
+      else
+        in(cp);
+        lookup <'supermajority', cp, c> as sm in
+          lookup <'justified', cp> as jcp in
+            insert <'justified', c>, '1')
+
+// restriction Finalized:
+//   "All c. c = root(c) | Justified(c) & (Ex cp. Supermajority(c, cp) & not(Conflicting(c, cp)) & h(cp) = h(c) + 1)"
+let Finalized =
+  !(in(c);
+    lookup <'height', c> as hc in
+      if hc = '1' then
+        insert <'finalized', c>, '1'
+      else
+        in(cp);
+        lookup <'justified', c> as jc in
+          lookup <'supermajority', c, cp> as sm in
+            lookup <'conflict', c, cp> as cccp in
+              0
+            else
+              lookup <'parent', cp> as pcp in
+                if pcp = c then
+                  insert <'finalized', c>, '1')
+
+
+
+/*
+ * Top-level process
+*/
+
+CheckpointTree || 
+HonestValidator || 
+DishonestValidator ||
+Conflict ||
+Justified ||
+Finalized ||
+VConflict ||
+VTest
+
+
+
+/*
+ * Restrictions
+ */
+
+restriction LessThan:
+  "All x y #i. LessThan(x, y)@i ==> Ex z. x + z = y"
+
+restriction GreaterEqualThan:
+  "All x y #i. GreaterEqualThan(x, y)@i ==> x=y | Ex z. x = y + z"
+
+
+restriction UniqueRoot:
+  "All a b #i #j. Insert(<'height', a>, '1')@i & Insert(<'height', b>, '1')@j ==> a = b"
+
+restriction UniqueHeight:
+  "All a ha hb #i #j. Insert(<'height', a>, ha)@i & Insert(<'height', a>, hb)@j ==> (ha = hb) & (#i = #j)"
+
+restriction IsInList:
+  "All a b c #i. Insert(<'isinlist', a, cons(b, c)>, '1')@i ==> (a = b) | Ex #j. Insert(<'isinlist', a, c>, '1')@j"
+
+
+
+/*
+ * Lemmas
+ */
+
+lemma V_can_fail:
+exists-trace
+"Ex a b c d #j. Fail(a,b,c,d)@j"
+
+lemma V_can_succeed:
+exists-trace
+"Ex a b c d #j. Ok(a,b,c,d)@j"
+
+lemma V_soundness:
+"All s1 s2 t1 t2 #i. Ok(s1,s2,t1,t2)@i ==>
+ not(Ex #j. Insert(<'vconflict', s1, s2>, '1')@j) &
+ not(Ex #k. Insert(<'vconflict', s1, t1>, '1')@k) &
+ not(Ex #l. Insert(<'vconflict', s1, t2>, '1')@l) &
+ not(Ex #m. Insert(<'vconflict', s2, t1>, '1')@m) &
+ not(Ex #n. Insert(<'vconflict', s2, t2>, '1')@n) &
+ not(Ex #o. Insert(<'vconflict', t1, t2>, '1')@o)"
+
+
+// There exists a block of height 1 and of height 3.
+// PROVEN
+lemma ex_height:
+  exists-trace
+  "Ex a b #j #k. Insert(<'height', a>, '1'+'1')@j & Insert(<'height', b>, '1'+'1'+'1')@k"
+
+// There exists a vote,
+// PROVEN
+lemma ex_vote:
+  exists-trace
+  "Ex vk a b ha hb #i. Insert(<'vote', vk, a, b, ha, hb>, '1')@i"
+
+// There exists a vote from an honest party.
+// PROVEN
+lemma ex_honest_vote:
+  exists-trace
+  "Ex vk a b ha hb #i #j. Honest(vk)@i & Insert(<'vote', vk, a, b, ha, hb>, '1')@j"
+
+// There exists a vote from a corrupted party.
+// PROVEN
+lemma ex_corrupted_vote:
+  exists-trace
+  "Ex vk a b ha hb #i #j. Corrupted(vk)@i & Insert(<'vote', vk, a, b, ha, hb>, '1')@j"
+
+// There exist two votes.
+// PROVEN
+lemma ex_two_votes:
+  exists-trace
+  "Ex vk vkp s t a b hs ht ha hb #i #j. Insert(<'vote', vk, s, t, hs, ht>, '1')@i & Insert(<'vote', vkp, a, b, ha, hb>, '1')@j & i < j"
+
+// There exist two votes from an honest party.
+// PROVEN
+lemma ex_two_honest_votes:
+  exists-trace
+  "Ex s t a b hs ht ha hb #i #j. Insert(<'vote', 'HonestValidator', s, t, hs, ht>, '1')@i & Insert(<'vote', 'HonestValidator', a, b, ha, hb>, '1')@j & (i < j)"
+
+// There exists a vote from an honest party and a vote from a corrupted party thereafter.
+// PROVEN
+lemma ex_honest_corrupted_votes:
+  exists-trace
+  "Ex s t a b hs ht ha hb #i #j. Insert(<'vote', 'HonestValidator', s, t, hs, ht>, '1')@i & Insert(<'vote', 'DishonestValidator', a, b, ha, hb>, '1')@j"
+
+// There exists a supermajority link.
+// PROVEN
+lemma ex_supermajority:
+  exists-trace
+  "Ex a b #i. Insert(<'supermajority', a, b>, '1')@i"
+
+// There exists a justified block.
+// PROVEN
+lemma ex_justified:
+  exists-trace
+  "Ex a #i. Insert(<'justified', a>, '1')@i"
+
+// There exists a finalized block.
+// PROVEN
+lemma ex_finalized:
+  exists-trace
+  "Ex a #i. Insert(<'finalized', a>, '1')@i"
+
+// There exist two finalized blocks.
+// PROVEN
+lemma ex_two_finalized:
+  exists-trace
+  "Ex a b #i #j. Insert(<'finalized', a>, '1')@i & Insert(<'finalized', b>, '1')@j & not(a = b)"
+
+// There exists a non-trivial (non-root) finalized block.
+// PROVEN
+lemma ex_finalized_non_trivial:
+  exists-trace
+  "Ex a #i #j. Insert(<'finalized', a>, '1')@i & Insert(<'height', a>, '1'+'1')@j & j < i"
+
+// There exists two conflicting blocks.
+// PROVEN
+lemma ex_conflict:
+  exists-trace
+  "Ex a b #i. Insert(<'conflict', a, b>, '1')@i"
+
+// There exists a justified block and a block which is in conflict with it.
+// PROVEN
+lemma ex_justified_conflict:
+  exists-trace
+  "Ex a b #i #j. Insert(<'justified', a>, '1')@i & Insert(<'conflict', a, b>, '1')@j & i < j"
+
+
+
+/*
+ * Accountablity
+ */
+
+/*
+ * Accountable Safety
+ *
+ * Accountablity cannot be proven for this property as it can only be violated if >= 1/3 of the validators are dishonest.
+ * In our model, dishonest validators represent 1/3 of all validators. However, since dishonest validators cannot create
+ * supermajority links, it is unclear how exactly 1/3 of the validators could violate the accountable safety property.
+ */
+end
